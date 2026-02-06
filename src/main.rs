@@ -2,10 +2,12 @@ mod config;
 mod core;
 mod utils;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use std::path::{Path, PathBuf};
+use std::io::{self, Write};
+use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -45,7 +47,31 @@ enum Commands {
 
     /// Show current cloak status and managed items
     Status,
+
+    /// Auto-scan project root for common dotfiles and hide them all
+    Tidy {
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
+
+/// Known dotfile/config patterns to auto-detect with `tidy`.
+const KNOWN_DOTFILES: &[&str] = &[
+    ".cursor",
+    ".vscode",
+    ".idea",
+    ".fleet",
+    ".claude",
+    ".devcontainer",
+    ".eslintrc",
+    ".prettierrc",
+    ".editorconfig",
+    ".env",
+    ".env.local",
+    ".env.development",
+    ".env.production",
+];
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -58,7 +84,49 @@ fn main() -> Result<()> {
         Commands::Hide { targets } => cmd_hide(&root, &targets),
         Commands::Unhide { targets } => cmd_unhide(&root, &targets),
         Commands::Status => cmd_status(&root),
+        Commands::Tidy { yes } => cmd_tidy(&root, yes),
     }
+}
+
+/// Validate a target name before hiding.
+fn validate_target(target: &str) -> Result<()> {
+    if target.is_empty() {
+        bail!("target name cannot be empty");
+    }
+
+    if target.starts_with('/') || target.starts_with('\\') {
+        bail!("absolute paths are not allowed: {target}");
+    }
+
+    // Reject Windows-style absolute paths like C:\foo
+    if target.len() >= 2 && target.as_bytes()[1] == b':' {
+        bail!("absolute paths are not allowed: {target}");
+    }
+
+    if target == ".." || target.contains("/../") || target.starts_with("../") || target.ends_with("/..") {
+        bail!("path traversal is not allowed: {target}");
+    }
+
+    if target == ".cloak" || target.starts_with(".cloak/") || target.starts_with(".cloak\\") {
+        bail!("cannot hide the .cloak directory itself");
+    }
+
+    if target.contains('/') || target.contains('\\') {
+        bail!("only top-level entries are allowed (no path separators): {target}");
+    }
+
+    Ok(())
+}
+
+/// Ensure cloak is initialized, auto-initializing if needed.
+fn ensure_initialized(root: &Path) -> Result<()> {
+    let storage = root.join(".cloak").join("storage");
+    if !storage.exists() {
+        println!("{}", "Auto-initializing cloak...".dimmed());
+        core::mover::ensure_storage_dir(root)?;
+        utils::git::ensure_gitignore_entry(root)?;
+    }
+    Ok(())
 }
 
 fn cmd_init(root: &Path) -> Result<()> {
@@ -75,6 +143,12 @@ fn cmd_init(root: &Path) -> Result<()> {
 }
 
 fn cmd_hide(root: &Path, targets: &[String]) -> Result<()> {
+    for target in targets {
+        validate_target(target)?;
+    }
+
+    ensure_initialized(root)?;
+
     for target in targets {
         println!("{} {}", "Hiding".bold(), target.yellow());
 
@@ -149,5 +223,77 @@ fn cmd_status(root: &Path) -> Result<()> {
         println!("  {} [{}]", name.to_string_lossy(), status);
     }
 
+    Ok(())
+}
+
+fn cmd_tidy(root: &Path, skip_confirm: bool) -> Result<()> {
+    ensure_initialized(root)?;
+
+    let storage = root.join(".cloak").join("storage");
+
+    // Scan root for known dotfiles that exist and aren't already hidden
+    let mut discovered: Vec<&str> = Vec::new();
+    for pattern in KNOWN_DOTFILES {
+        let path = root.join(pattern);
+        let already_hidden = storage.join(pattern).exists();
+
+        // Skip if already hidden or doesn't exist at root
+        if already_hidden {
+            continue;
+        }
+
+        // Check if it exists as a real file/dir (not a symlink pointing to storage)
+        if path.exists() {
+            // If it's a symlink to our storage, skip it
+            if let Ok(meta) = path.symlink_metadata()
+                && meta.file_type().is_symlink()
+            {
+                continue;
+            }
+            discovered.push(pattern);
+        }
+    }
+
+    if discovered.is_empty() {
+        println!("{}", "No known dotfiles/configs found to hide.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Discovered configs:".bold());
+    for name in &discovered {
+        println!("  {}", name.yellow());
+    }
+
+    if !skip_confirm {
+        print!("\nHide all {} items? [y/N] ", discovered.len());
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("{}", "Aborted.".dimmed());
+            return Ok(());
+        }
+    }
+
+    println!();
+    let targets: Vec<String> = discovered.iter().map(|s| s.to_string()).collect();
+    for target in &targets {
+        println!("{} {}", "Hiding".bold(), target.yellow());
+
+        core::mover::ingest(root, target)?;
+        core::linker::create_ghost_link(root, target)?;
+        core::hider::hide_path(root, target)?;
+        config::ide::add_vscode_exclude(root, target)?;
+        utils::git::add_ignore_entry(root, target)?;
+
+        println!("  {} {}", "✓".green(), target);
+    }
+
+    println!(
+        "{}",
+        format!("Done. {} configs hidden.", targets.len()).green()
+    );
     Ok(())
 }

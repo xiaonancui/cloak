@@ -33,29 +33,54 @@ pub fn create_ghost_link(root: &Path, target: &str) -> Result<()> {
 
     #[cfg(windows)]
     {
-        if storage_path.is_dir() {
-            std::os::windows::fs::symlink_dir(&storage_path, &link_path).with_context(|| {
-                format!(
-                    "failed to create directory symlink {} -> {}",
-                    link_path.display(),
-                    storage_path.display()
-                )
-            })?;
-        } else {
-            std::os::windows::fs::symlink_file(&storage_path, &link_path).with_context(|| {
-                format!(
-                    "failed to create file symlink {} -> {}",
-                    link_path.display(),
-                    storage_path.display()
-                )
-            })?;
-        }
+        create_ghost_link_windows(&storage_path, &link_path)?;
     }
 
     Ok(())
 }
 
-/// Remove the symlink at the original location.
+/// Windows-specific link creation with junction fallback for directories.
+#[cfg(windows)]
+fn create_ghost_link_windows(storage_path: &Path, link_path: &Path) -> Result<()> {
+    if storage_path.is_dir() {
+        // Try symlink first; fall back to junction if permission denied
+        match std::os::windows::fs::symlink_dir(storage_path, link_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "Warning: Symlink creation failed (need Developer Mode). Using junction instead."
+                );
+                junction::create(storage_path, link_path).with_context(|| {
+                    format!(
+                        "failed to create junction {} -> {}",
+                        link_path.display(),
+                        storage_path.display()
+                    )
+                })?;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "failed to create directory symlink {} -> {}",
+                        link_path.display(),
+                        storage_path.display()
+                    )
+                });
+            }
+        }
+    } else {
+        std::os::windows::fs::symlink_file(storage_path, link_path).with_context(|| {
+            format!(
+                "failed to create file symlink {} -> {} (file symlinks require Developer Mode on Windows)",
+                link_path.display(),
+                storage_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Remove the symlink (or junction on Windows) at the original location.
 pub fn remove_ghost_link(root: &Path, target: &str) -> Result<()> {
     let link_path = root.join(target);
 
@@ -64,6 +89,17 @@ pub fn remove_ghost_link(root: &Path, target: &str) -> Result<()> {
     })?;
 
     if !meta.file_type().is_symlink() {
+        // On Windows, check if it's a junction before rejecting
+        #[cfg(windows)]
+        {
+            if junction::exists(&link_path).unwrap_or(false) {
+                junction::delete(&link_path).with_context(|| {
+                    format!("failed to remove junction: {}", link_path.display())
+                })?;
+                return Ok(());
+            }
+        }
+
         bail!(
             "path is not a symlink (refusing to remove): {}",
             link_path.display()
