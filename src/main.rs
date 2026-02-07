@@ -155,7 +155,7 @@ fn cmd_hide(root: &Path, targets: &[String]) -> Result<()> {
         core::mover::ingest(root, target)?;
         core::linker::create_ghost_link(root, target)?;
         core::hider::hide_path(root, target)?;
-        config::ide::add_vscode_exclude(root, target)?;
+        config::ide::add_ide_exclude(root, target)?;
         utils::git::add_ignore_entry(root, target)?;
 
         println!("  {} {}", "✓".green(), target);
@@ -169,7 +169,7 @@ fn cmd_unhide(root: &Path, targets: &[String]) -> Result<()> {
     for target in targets {
         println!("{} {}", "Restoring".bold(), target.yellow());
 
-        config::ide::remove_vscode_exclude(root, target)?;
+        config::ide::remove_ide_exclude(root, target)?;
         utils::git::remove_ignore_entry(root, target)?;
         core::hider::unhide_path(root, target)?;
         core::linker::remove_ghost_link(root, target)?;
@@ -285,7 +285,7 @@ fn cmd_tidy(root: &Path, skip_confirm: bool) -> Result<()> {
         core::mover::ingest(root, target)?;
         core::linker::create_ghost_link(root, target)?;
         core::hider::hide_path(root, target)?;
-        config::ide::add_vscode_exclude(root, target)?;
+        config::ide::add_ide_exclude(root, target)?;
         utils::git::add_ignore_entry(root, target)?;
 
         println!("  {} {}", "✓".green(), target);

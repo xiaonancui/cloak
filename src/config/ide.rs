@@ -3,42 +3,64 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::path::Path;
 
-const VSCODE_DIR: &str = ".vscode";
 const SETTINGS_FILE: &str = "settings.json";
 const EXCLUDE_KEY: &str = "files.exclude";
 
-/// Add a target to `.vscode/settings.json` `files.exclude` so it disappears from the editor.
-pub fn add_vscode_exclude(root: &Path, target: &str) -> Result<()> {
-    let settings_path = root.join(VSCODE_DIR).join(SETTINGS_FILE);
-    let mut settings = load_or_create_settings(&settings_path)?;
+/// IDE directories whose `settings.json` we manage.
+/// .vscode settings are always created; others only if the directory already exists.
+const IDE_DIRS: &[&str] = &[".vscode", ".cursor"];
 
-    let exclude = settings
-        .entry(EXCLUDE_KEY)
-        .or_insert_with(|| Value::Object(Map::new()));
+/// Add a target to `files.exclude` in all relevant IDE settings files.
+pub fn add_ide_exclude(root: &Path, target: &str) -> Result<()> {
+    let exclude_key = format!("**/{target}");
 
-    if let Value::Object(map) = exclude {
-        map.insert(target.to_string(), Value::Bool(true));
+    for ide_dir in IDE_DIRS {
+        let dir_path = root.join(ide_dir);
+        let settings_path = dir_path.join(SETTINGS_FILE);
+
+        // For .vscode, always create if needed. For others, only write if the dir exists.
+        if *ide_dir != ".vscode" && !dir_path.exists() {
+            continue;
+        }
+
+        let mut settings = load_or_create_settings(&settings_path)?;
+
+        let exclude = settings
+            .entry(EXCLUDE_KEY)
+            .or_insert_with(|| Value::Object(Map::new()));
+
+        if let Value::Object(map) = exclude {
+            map.insert(exclude_key.clone(), Value::Bool(true));
+        }
+
+        save_settings(&settings_path, &settings)?;
     }
 
-    save_settings(&settings_path, &settings)?;
     Ok(())
 }
 
-/// Remove a target from `.vscode/settings.json` `files.exclude`.
-pub fn remove_vscode_exclude(root: &Path, target: &str) -> Result<()> {
-    let settings_path = root.join(VSCODE_DIR).join(SETTINGS_FILE);
+/// Remove a target from `files.exclude` in all relevant IDE settings files.
+pub fn remove_ide_exclude(root: &Path, target: &str) -> Result<()> {
+    let exclude_key = format!("**/{target}");
 
-    if !settings_path.exists() {
-        return Ok(());
+    for ide_dir in IDE_DIRS {
+        let settings_path = root.join(ide_dir).join(SETTINGS_FILE);
+
+        if !settings_path.exists() {
+            continue;
+        }
+
+        let mut settings = load_or_create_settings(&settings_path)?;
+
+        if let Some(Value::Object(map)) = settings.get_mut(EXCLUDE_KEY) {
+            // Remove both the glob-prefixed key and any legacy bare key
+            map.remove(&exclude_key);
+            map.remove(target);
+        }
+
+        save_settings(&settings_path, &settings)?;
     }
 
-    let mut settings = load_or_create_settings(&settings_path)?;
-
-    if let Some(Value::Object(map)) = settings.get_mut(EXCLUDE_KEY) {
-        map.remove(target);
-    }
-
-    save_settings(&settings_path, &settings)?;
     Ok(())
 }
 
