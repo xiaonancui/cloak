@@ -209,34 +209,74 @@ fn cmd_status(root: &Path) -> Result<()> {
         return Ok(());
     }
 
+    // 1. Show items in storage
     let entries: Vec<_> = std::fs::read_dir(&storage)?
         .filter_map(|e| e.ok())
         .collect();
 
-    if entries.is_empty() {
+    if entries.is_empty() && find_orphaned_links(root, &storage).is_empty() {
         println!("{}", "No configs are currently hidden.".dimmed());
         return Ok(());
     }
 
-    println!("{}", "Hidden configs:".bold());
-    for entry in entries {
-        let name = entry.file_name();
-        let link_path = root.join(&name);
-        let link_ok = link_path
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
+    if !entries.is_empty() {
+        println!("{}", "Hidden configs:".bold());
+        for entry in &entries {
+            let name = entry.file_name();
+            let link_path = root.join(&name);
+            let link_ok = link_path
+                .symlink_metadata()
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
 
-        let status = if link_ok {
-            "linked".green()
-        } else {
-            "link missing".red()
-        };
+            let status = if link_ok {
+                "linked".green()
+            } else {
+                "link missing".red()
+            };
 
-        println!("  {} [{}]", name.to_string_lossy(), status);
+            println!("  {} [{}]", name.to_string_lossy(), status);
+        }
+    }
+
+    // 2. Detect orphaned symlinks pointing into .cloak/storage/ whose targets are gone
+    let orphans = find_orphaned_links(root, &storage);
+
+    if !orphans.is_empty() {
+        println!("\n{}", "Orphaned symlinks (storage target missing):".red().bold());
+        for name in &orphans {
+            println!("  {} [{}]", name.to_string_lossy(), "broken".red());
+        }
+        println!(
+            "{}",
+            "  Tip: remove these with `rm <name>` or re-hide the original files.".dimmed()
+        );
     }
 
     Ok(())
+}
+
+/// Find symlinks in root that point into .cloak/storage/ but whose targets no longer exist.
+fn find_orphaned_links(root: &Path, storage: &Path) -> Vec<std::ffi::OsString> {
+    let storage_prefix = storage.canonicalize().unwrap_or(storage.to_path_buf());
+    let mut orphans = Vec::new();
+    let Ok(dir) = std::fs::read_dir(root) else {
+        return orphans;
+    };
+    for entry in dir.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let is_orphan = path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+            && std::fs::read_link(&path).is_ok_and(|target| {
+                (target.starts_with(&storage_prefix) || target.starts_with(storage))
+                    && !target.exists()
+            });
+        if is_orphan {
+            orphans.push(entry.file_name());
+        }
+    }
+    orphans
 }
 
 fn cmd_tidy(root: &Path, skip_confirm: bool) -> Result<()> {
