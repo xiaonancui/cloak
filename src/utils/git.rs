@@ -19,8 +19,24 @@ pub fn ensure_gitignore_entry(root: &Path) -> Result<()> {
         String::new()
     };
 
-    // Already has the new-style pattern — nothing to do
-    if content.contains("/.cloak/*") {
+    let has_ignore = content.lines().any(|line| line.trim() == "/.cloak/*");
+    let has_whitelist = content
+        .lines()
+        .any(|line| line.trim() == "!/.cloak/storage/");
+
+    // Already has both required patterns — nothing to do
+    if has_ignore && has_whitelist {
+        return Ok(());
+    }
+
+    // If ignore exists but whitelist is missing, append just the whitelist.
+    if has_ignore && !has_whitelist {
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str("!/.cloak/storage/\n");
+        fs::write(&gitignore_path, content.as_bytes())
+            .with_context(|| format!("failed to write {}", gitignore_path.display()))?;
         return Ok(());
     }
 
@@ -176,4 +192,60 @@ fn rebuild_gitignore(content: &str, entries: &[String]) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let pid = std::process::id();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        dir.push(format!("cloak-{prefix}-{pid}-{nanos}-{seq}"));
+        fs::create_dir_all(&dir).expect("failed to create temp test dir");
+        dir
+    }
+
+    #[test]
+    fn ensure_gitignore_adds_whitelist_if_missing() {
+        let root = make_temp_dir("gitignore-whitelist");
+        fs::write(root.join(".gitignore"), "/.cloak/*\n").expect("write .gitignore failed");
+
+        ensure_gitignore_entry(&root).expect("ensure_gitignore_entry failed");
+
+        let content = fs::read_to_string(root.join(".gitignore")).expect("read .gitignore failed");
+        assert!(content.contains("/.cloak/*"));
+        assert!(content.contains("!/.cloak/storage/"));
+
+        fs::remove_dir_all(root).expect("cleanup failed");
+    }
+
+    #[test]
+    fn add_and_remove_ignore_entry_round_trip() {
+        let root = make_temp_dir("gitignore-roundtrip");
+        ensure_gitignore_entry(&root).expect("ensure_gitignore_entry failed");
+
+        add_ignore_entry(&root, ".cursor").expect("add_ignore_entry failed");
+        let content = fs::read_to_string(root.join(".gitignore")).expect("read .gitignore failed");
+        assert!(content.contains("/.cursor"));
+        assert!(content.contains(CLOAK_SECTION_START));
+        assert!(content.contains(CLOAK_SECTION_END));
+
+        remove_ignore_entry(&root, ".cursor").expect("remove_ignore_entry failed");
+        let content_after =
+            fs::read_to_string(root.join(".gitignore")).expect("read .gitignore failed");
+        assert!(!content_after.contains("/.cursor"));
+        assert!(!content_after.contains(CLOAK_SECTION_START));
+
+        fs::remove_dir_all(root).expect("cleanup failed");
+    }
 }

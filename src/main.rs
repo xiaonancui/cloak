@@ -2,7 +2,7 @@ mod config;
 mod core;
 mod utils;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::io::{self, Write};
@@ -116,7 +116,11 @@ fn validate_target(target: &str) -> Result<()> {
         bail!("absolute paths are not allowed: {target}");
     }
 
-    if target == ".." || target.contains("/../") || target.starts_with("../") || target.ends_with("/..") {
+    if target == ".."
+        || target.contains("/../")
+        || target.starts_with("../")
+        || target.ends_with("/..")
+    {
         bail!("path traversal is not allowed: {target}");
     }
 
@@ -180,6 +184,10 @@ fn cmd_hide(root: &Path, targets: &[String]) -> Result<()> {
 
 fn cmd_unhide(root: &Path, targets: &[String]) -> Result<()> {
     for target in targets {
+        validate_target(target)?;
+    }
+
+    for target in targets {
         println!("{} {}", "Restoring".bold(), target.yellow());
 
         config::ide::remove_ide_exclude(root, target)?;
@@ -196,6 +204,68 @@ fn cmd_unhide(root: &Path, targets: &[String]) -> Result<()> {
         "Done. Configs restored to their original locations.".green()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_target;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    use super::cmd_unhide;
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let pid = std::process::id();
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        dir.push(format!("cloak-{prefix}-{pid}-{nanos}-{seq}"));
+        fs::create_dir_all(&dir).expect("failed to create temp test dir");
+        dir
+    }
+
+    #[test]
+    fn validate_target_accepts_top_level_dotfile() {
+        assert!(validate_target(".cursor").is_ok());
+    }
+
+    #[test]
+    fn validate_target_rejects_absolute_path() {
+        assert!(validate_target("/tmp/a").is_err());
+    }
+
+    #[test]
+    fn validate_target_rejects_path_traversal() {
+        assert!(validate_target("../outside").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cmd_unhide_rejects_traversal_before_touching_outside_path() {
+        let base = make_temp_dir("unhide-validate");
+        let root = base.join("root");
+        fs::create_dir_all(root.join(".cloak").join("storage")).expect("failed to create storage");
+
+        let outside_link = base.join("outside-link");
+        std::os::unix::fs::symlink("/tmp", &outside_link).expect("failed to create outside link");
+
+        let targets = vec!["../outside-link".to_string()];
+        let result = cmd_unhide(&root, &targets);
+        assert!(result.is_err());
+        assert!(
+            outside_link.symlink_metadata().is_ok(),
+            "outside path must not be touched"
+        );
+
+        fs::remove_dir_all(base).expect("cleanup failed");
+    }
 }
 
 fn cmd_status(root: &Path) -> Result<()> {
@@ -243,7 +313,10 @@ fn cmd_status(root: &Path) -> Result<()> {
     let orphans = find_orphaned_links(root, &storage);
 
     if !orphans.is_empty() {
-        println!("\n{}", "Orphaned symlinks (storage target missing):".red().bold());
+        println!(
+            "\n{}",
+            "Orphaned symlinks (storage target missing):".red().bold()
+        );
         for name in &orphans {
             println!("  {} [{}]", name.to_string_lossy(), "broken".red());
         }

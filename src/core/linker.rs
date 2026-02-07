@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 /// Create a symlink at the original location pointing to `.cloak/storage/<target>`.
@@ -14,10 +14,7 @@ pub fn create_ghost_link(root: &Path, target: &str) -> Result<()> {
     }
 
     if !storage_path.exists() {
-        bail!(
-            "storage target does not exist: {}",
-            storage_path.display()
-        );
+        bail!("storage target does not exist: {}", storage_path.display());
     }
 
     #[cfg(unix)]
@@ -84,9 +81,9 @@ fn create_ghost_link_windows(storage_path: &Path, link_path: &Path) -> Result<()
 pub fn remove_ghost_link(root: &Path, target: &str) -> Result<()> {
     let link_path = root.join(target);
 
-    let meta = link_path.symlink_metadata().with_context(|| {
-        format!("symlink does not exist: {}", link_path.display())
-    })?;
+    let meta = link_path
+        .symlink_metadata()
+        .with_context(|| format!("symlink does not exist: {}", link_path.display()))?;
 
     if !meta.file_type().is_symlink() {
         // On Windows, check if it's a junction before rejecting
@@ -117,11 +114,13 @@ pub fn remove_ghost_link(root: &Path, target: &str) -> Result<()> {
     #[cfg(windows)]
     {
         if meta.is_dir() {
-            std::fs::remove_dir(&link_path)
-                .with_context(|| format!("failed to remove dir symlink: {}", link_path.display()))?;
+            std::fs::remove_dir(&link_path).with_context(|| {
+                format!("failed to remove dir symlink: {}", link_path.display())
+            })?;
         } else {
-            std::fs::remove_file(&link_path)
-                .with_context(|| format!("failed to remove file symlink: {}", link_path.display()))?;
+            std::fs::remove_file(&link_path).with_context(|| {
+                format!("failed to remove file symlink: {}", link_path.display())
+            })?;
         }
     }
 

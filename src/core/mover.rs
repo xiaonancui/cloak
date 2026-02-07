@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
 
@@ -21,9 +21,8 @@ fn move_path(src: &Path, dest: &Path) -> Result<()> {
             copy_and_delete(src, dest)?;
             Ok(())
         }
-        Err(e) => Err(e).with_context(|| {
-            format!("failed to move {} -> {}", src.display(), dest.display())
-        }),
+        Err(e) => Err(e)
+            .with_context(|| format!("failed to move {} -> {}", src.display(), dest.display())),
     }
 }
 

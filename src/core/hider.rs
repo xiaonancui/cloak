@@ -52,8 +52,7 @@ fn macos_set_hidden(path: &Path, hidden: bool) -> Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    let c_path = CString::new(path.as_os_str().as_bytes())
-        .context("path contains null byte")?;
+    let c_path = CString::new(path.as_os_str().as_bytes()).context("path contains null byte")?;
 
     // UF_HIDDEN = 0x8000
     const UF_HIDDEN: u32 = 0x8000;
