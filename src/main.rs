@@ -56,22 +56,29 @@ enum Commands {
     },
 }
 
-/// Known dotfile/config patterns to auto-detect with `tidy`.
+/// Known vibe coding tool config directories to auto-detect with `tidy`.
 const KNOWN_DOTFILES: &[&str] = &[
+    // AI IDEs / Editors
     ".cursor",
     ".vscode",
-    ".idea",
-    ".fleet",
-    ".claude",
     ".windsurf",
-    ".devcontainer",
-    ".eslintrc",
-    ".prettierrc",
-    ".editorconfig",
-    ".env",
-    ".env.local",
-    ".env.development",
-    ".env.production",
+    ".trae",
+    ".zed",
+    // JetBrains
+    ".idea",
+    ".junie",
+    // AI coding agents
+    ".claude",
+    ".codex",
+    ".gemini",
+    ".amazonq",
+    ".augment",
+    ".bolt",
+    ".tabnine",
+    // VS Code AI extensions
+    ".cline",
+    ".roo",
+    ".kilocode",
 ];
 
 fn main() -> Result<()> {
