@@ -75,6 +75,10 @@ const KNOWN_DOTFILES: &[&str] = &[
     ".augment",
     ".bolt",
     ".tabnine",
+    // China AI coding tools (中国大模型代码工具)
+    ".codebuddy",
+    ".lingma",
+    ".comate",
     // VS Code AI extensions
     ".cline",
     ".roo",
