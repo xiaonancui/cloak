@@ -79,6 +79,7 @@ const KNOWN_DOTFILES: &[&str] = &[
     ".codebuddy",
     ".lingma",
     ".comate",
+    ".kimi",
     // VS Code AI extensions
     ".cline",
     ".roo",
