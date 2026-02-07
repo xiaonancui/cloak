@@ -6,7 +6,10 @@ const GITIGNORE: &str = ".gitignore";
 const CLOAK_SECTION_START: &str = "# >>> cloak managed";
 const CLOAK_SECTION_END: &str = "# <<< cloak managed";
 
-/// Ensure `.cloak/` is in `.gitignore` (run during `cloak init`).
+/// Ensure the cloak gitignore block exists: ignore `.cloak/*` but whitelist `.cloak/storage/`.
+///
+/// This allows real configs inside `.cloak/storage/` to be committed to git,
+/// while cloak internals (e.g. metadata files) are ignored.
 pub fn ensure_gitignore_entry(root: &Path) -> Result<()> {
     let gitignore_path = root.join(GITIGNORE);
     let mut content = if gitignore_path.exists() {
@@ -16,16 +19,36 @@ pub fn ensure_gitignore_entry(root: &Path) -> Result<()> {
         String::new()
     };
 
-    // Don't duplicate
-    if content.contains(".cloak/") {
+    // Already has the new-style pattern — nothing to do
+    if content.contains("/.cloak/*") {
         return Ok(());
+    }
+
+    // Migrate legacy pattern: replace bare `.cloak/` with the new block
+    if content.contains(".cloak/") {
+        content = content
+            .lines()
+            .filter(|line| {
+                let t = line.trim();
+                t != ".cloak/" && t != "/.cloak/" && t != "# Cloak storage"
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Ensure trailing newline after filtering
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
     }
 
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
 
-    content.push_str("\n# Cloak storage\n.cloak/\n");
+    content.push_str(
+        "\n# --- Cloak ---\n\
+         /.cloak/*\n\
+         !/.cloak/storage/\n",
+    );
 
     fs::write(&gitignore_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", gitignore_path.display()))?;
@@ -34,6 +57,9 @@ pub fn ensure_gitignore_entry(root: &Path) -> Result<()> {
 }
 
 /// Add a symlink target to the cloak-managed section in `.gitignore`.
+///
+/// Entries are root-anchored (e.g. `/.cursor`) so only the symlink at the
+/// project root is ignored, not nested occurrences.
 pub fn add_ignore_entry(root: &Path, target: &str) -> Result<()> {
     let gitignore_path = root.join(GITIGNORE);
     let content = if gitignore_path.exists() {
@@ -44,13 +70,14 @@ pub fn add_ignore_entry(root: &Path, target: &str) -> Result<()> {
     };
 
     let mut entries = parse_managed_section(&content);
+    let anchored = format!("/{target}");
 
-    // Don't duplicate
-    if entries.contains(&target.to_string()) {
+    // Don't duplicate (check both anchored and legacy bare forms)
+    if entries.contains(&anchored) || entries.contains(&target.to_string()) {
         return Ok(());
     }
 
-    entries.push(target.to_string());
+    entries.push(anchored);
     let new_content = rebuild_gitignore(&content, &entries);
 
     fs::write(&gitignore_path, new_content.as_bytes())
@@ -71,7 +98,10 @@ pub fn remove_ignore_entry(root: &Path, target: &str) -> Result<()> {
         .with_context(|| format!("failed to read {}", gitignore_path.display()))?;
 
     let mut entries = parse_managed_section(&content);
-    entries.retain(|e| e != target);
+    let anchored = format!("/{target}");
+
+    // Remove both anchored and legacy bare forms
+    entries.retain(|e| e != &anchored && e != target);
 
     let new_content = rebuild_gitignore(&content, &entries);
 

@@ -63,6 +63,7 @@ const KNOWN_DOTFILES: &[&str] = &[
     ".idea",
     ".fleet",
     ".claude",
+    ".windsurf",
     ".devcontainer",
     ".eslintrc",
     ".prettierrc",
